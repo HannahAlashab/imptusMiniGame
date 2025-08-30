@@ -516,18 +516,32 @@
         const GAME_CONFIG = {
             // NOTE: Set game duration in hours (24 for 24 hours)
             gameDurationHours: 24,
-            
-            // NOTE: Add/modify players here with their codes, names, and avatars
-            players: {
-                '1234': { name: 'أحمد / Ahmed', avatar: '😊' },
-                '5678': { name: 'سارة / Sarah', avatar: '😄' },
-                '9012': { name: 'محمد / Mohammed', avatar: '🙂' },
-                '3456': { name: 'فاطمة / Fatima', avatar: '😃' },
-                '7890': { name: 'علي / Ali', avatar: '😁' },
-                '2468': { name: 'نور / Noor', avatar: '😊' },
-                '1357': { name: 'خالد / Khaled', avatar: '🙂' },
-                '9753': { name: 'مريم / Mariam', avatar: '😄' }
-            }
+
+            const SHEET_URL = "https://script.google.com/u/0/home/projects/1m6xmbEUbrI77i_jS4p2HV1Yzx2hPsiBzHvwI3YM6-RoNmfCDXWQy0cPQ/edit"; 
+// Save result
+async function saveResult(playerCode, playerData) {
+    await fetch(SHEET_URL, {
+        method: "POST",
+        body: JSON.stringify({
+            Code: playerCode,
+            Name: playerData.name,
+            Avatar: playerData.avatar,
+            Points: playerData.points,
+            Time: playerData.time
+        })
+    });
+}
+
+// Load results
+async function loadResults() {
+    const res = await fetch(SHEET_URL);
+    let resultsArray = await res.json();
+
+    // Sort: highest points first, then fastest time
+    resultsArray.sort((a, b) => b.Points - a.Points || a.Time - b.Time);
+
+    renderResultsList(resultsArray);
+}
         };
 
         // Game state
@@ -844,22 +858,19 @@
             const totalTime = Math.floor((gameState.endTime - gameState.startTime) / 1000);
             
             // Save results to memory (Note: In a real app, this would be saved to a server)
-            const playerCode = Object.keys(GAME_CONFIG.players).find(
-                code => GAME_CONFIG.players[code] === gameState.currentPlayer
-            );
-            
-            gameResults[playerCode] = {
-                name: gameState.currentPlayer.name,
-                avatar: gameState.currentPlayer.avatar,
-                points: gameState.currentPoints,
-                time: totalTime,
-                timestamp: gameState.endTime
-            };
-            
+            saveResult(playerCode, {
+    name: gameState.currentPlayer.name,
+    avatar: gameState.currentPlayer.avatar,
+    points: gameState.currentPoints,
+    time: totalTime
+});
+async function showResults() {
+    document.getElementById('gamePage').classList.remove('active');
+    document.getElementById('resultsPage').classList.add('active');
+    await loadResults();
             // NOTE: Since localStorage is not supported, results will only persist during this session
             // In a real application, you would send this data to a server
             
-            showResults();
         }
 
         function showResults() {
@@ -891,57 +902,22 @@
 }
 
 
-        function renderResults() {
-            const container = document.getElementById('resultsGrid');
-            container.innerHTML = '';
-            
-            // Convert results to array and sort
-            const resultsArray = Object.entries(gameResults).map(([code, result]) => ({
-                code,
-                ...result
-            }));
-            
-            // Sort by points (desc) then by time (asc)
-            resultsArray.sort((a, b) => {
-                if (a.points !== b.points) {
-                    return b.points - a.points;
-                }
-                return a.time - b.time;
-            });
-            
-            const currentPlayerCode = Object.keys(GAME_CONFIG.players).find(
-                code => GAME_CONFIG.players[code] === gameState.currentPlayer
-            );
-            
-            // Render top players
-            const topPlayers = resultsArray.slice(0, 9);
-            topPlayers.forEach((result, index) => {
-                const card = createResultCard(result, index === 0, result.code === currentPlayerCode);
-                container.appendChild(card);
-            });
-            
-            // Show current player at bottom if not in top results
-            const currentPlayerResult = resultsArray.find(r => r.code === currentPlayerCode);
-            if (currentPlayerResult && !topPlayers.includes(currentPlayerResult)) {
-                const card = createResultCard(currentPlayerResult, false, true);
-                container.appendChild(card);
-            }
-            
-            const finalNote = document.getElementById('finalNote');
-if (gameState.gameExpired) {
-    finalNote.innerHTML = `
-        <div class="timer-expired">
-            انتهت فترة اللعبة! هذه هي النتائج النهائية<br>
-            Game period has ended! These are the final results
-        </div>
-    `;
-} else {
-    finalNote.innerHTML = `
-        هذه هي النتائج الحالية (قد تتغير مع انتهاء بقية اللاعبين)<br>
-        These are the current results (they may change as more players finish).
-    `;
+        function renderResultsList(resultsArray) {
+    const container = document.getElementById('resultsGrid');
+    container.innerHTML = '';
+
+    const top3 = resultsArray.slice(0, 3);
+    top3.forEach(result => {
+        const card = createResultCard(result, true, false); // winner highlight
+        container.appendChild(card);
+    });
+
+    resultsArray.slice(3).forEach(result => {
+        const card = createResultCard(result, false, false);
+        container.appendChild(card);
+    });
 }
-        }
         </script>
     </body>
+
 </html>
