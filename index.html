@@ -517,7 +517,7 @@
             // NOTE: Set game duration in hours (24 for 24 hours)
             gameDurationHours: 24,
 
-            const SHEET_URL = "https://script.google.com/u/0/home/projects/1m6xmbEUbrI77i_jS4p2HV1Yzx2hPsiBzHvwI3YM6-RoNmfCDXWQy0cPQ/edit"; 
+            const SHEET_URL = "https://script.google.com/macros/s/AKfycbxTnl0GuX1vzmQRPfOfhLoZktLMHIpT-aCRDJx-lmmeP1Vd_XuQViEyQ_bTK-lN2GlP/exec"; 
 // Save result
 async function saveResult(playerCode, playerData) {
     await fetch(SHEET_URL, {
@@ -639,35 +639,47 @@ async function loadResults() {
             gameState.gameExpired = now > gameEnd;
         }
 
-        function startGame() {
-            const code = document.getElementById('playerCode').value;
-            
-            if (!code || code.length !== 4) {
-                alert('يرجى إدخال كود صحيح من 4 أرقام / Please enter a valid 4-digit code');
-                return;
-            }
-            
-            if (!GAME_CONFIG.players[code]) {
-                alert('كود غير صحيح / Invalid code');
-                return;
-            }
+async function startGame() {
+    const code = document.getElementById('playerCode').value.trim();
 
-            checkGameExpiry();
-            
-            if (gameState.gameExpired) {
-                gameState.currentPlayer = GAME_CONFIG.players[code];
-                showResults();
-                return;
-            }
-            
-            gameState.currentPlayer = GAME_CONFIG.players[code];
-            gameState.startTime = Date.now();
-            
-            document.getElementById('introPage').classList.remove('active');
-            document.getElementById('gamePage').classList.add('active');
-            
-            initGame();
-        }
+    if (!code || code.length !== 4) {
+        alert('يرجى إدخال كود صحيح من 4 أرقام / Please enter a valid 4-digit code');
+        return;
+    }
+
+    // Load players from Google Sheet
+    const res = await fetch(SHEET_URL);
+    const rows = await res.json();
+
+    // Find player by Code
+    const playerRow = rows.find(r => String(r.Code).trim() === code);
+
+    if (!playerRow) {
+        alert('كود غير صحيح / Invalid code');
+        return;
+    }
+
+    // If already finished → jump to results
+    if (playerRow.Points && playerRow.Time) {
+        showResults();
+        return;
+    }
+
+    // Otherwise → set up current player
+    gameState.currentPlayer = {
+        code,
+        name: playerRow.Name || 'Player',
+        avatar: playerRow.Avatar || '🙂'
+    };
+    gameState.startTime = Date.now();
+
+    // Switch to the game page
+    document.getElementById('introPage').classList.remove('active');
+    document.getElementById('gamePage').classList.add('active');
+
+    initGame();
+}
+
 
         function populateOtherPlayers() {
             const container = document.getElementById('otherPlayers');
@@ -921,3 +933,4 @@ async function showResults() {
     </body>
 
 </html>
+
