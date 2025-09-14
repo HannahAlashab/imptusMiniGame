@@ -512,16 +512,21 @@
     </div>
 
     <script>
-        // Game configuration - NOTE: Modify these objects to add/change players and game settings
-        const GAME_CONFIG = {
-            // NOTE: Set game duration in hours (24 for 24 hours)
-            gameDurationHours: 24,
-        };
-            const SHEET_URL = "https://script.google.com/macros/s/AKfycbxTnl0GuX1vzmQRPfOfhLoZktLMHIpT-aCRDJx-lmmeP1Vd_XuQViEyQ_bTK-lN2GlP/exec"; 
-// Save result
+        <script>
+/* ----------------- Config ----------------- */
+const GAME_CONFIG = {
+    gameDurationHours: 24
+};
+
+// <-- REPLACE this with your DEPLOYED Apps Script /exec URL -->
+const SHEET_URL = "https://script.google.com/macros/s/AKfycbxTnl0GuX1vzmQRPfOfhLoZktLMHIpT-aCRDJx-lmmeP1Vd_XuQViEyQ_bTK-lN2GlP/exec";
+
+/* -------------- Helper: HTTP to Sheet -------------- */
+// Save result to Google Sheet (doPost)
 async function saveResult(playerCode, playerData) {
     await fetch(SHEET_URL, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             Code: playerCode,
             Name: playerData.name,
@@ -532,406 +537,282 @@ async function saveResult(playerCode, playerData) {
     });
 }
 
-// Load results
-async function loadResults() {
+// Load all rows from Google Sheet (doGet) and normalize fields
+async function loadResultsArray() {
     const res = await fetch(SHEET_URL);
-    let resultsArray = await res.json();
+    const rows = await res.json();
+
+    // Normalize field names and types for internal usage
+    const normalized = rows.map(r => ({
+        Code: String(r.Code ?? r.code ?? "").trim(),
+        Name: r.Name ?? r.name ?? "Player",
+        Avatar: r.Avatar ?? r.avatar ?? "🙂",
+        Points: parseInt(r.Points ?? r.points ?? 0, 10) || 0,
+        Time: parseInt(r.Time ?? r.time ?? 0, 10) || 0,
+        // keep other fields if exist (e.g., Location)
+        ...r
+    }));
 
     // Sort: highest points first, then fastest time
-    resultsArray.sort((a, b) => b.Points - a.Points || a.Time - b.Time);
+    normalized.sort((a, b) => {
+        if (b.Points !== a.Points) return b.Points - a.Points;
+        return a.Time - b.Time;
+    });
 
-    renderResultsList(resultsArray);
+    return normalized;
 }
-        };
 
-        // Game state
-        let gameState = {
-            currentPlayer: null,
-            startTime: null,
-            endTime: null,
-            currentPoints: 0,
-            completedChallenges: new Set(),
-            gameStarted: Date.now(), // NOTE: Change this to set when the game period starts
-            gameExpired: false
-        };
+/* ----------------- Game state ----------------- */
+let gameState = {
+    currentPlayer: null, // { code, name, avatar }
+    startTime: null,
+    endTime: null,
+    currentPoints: 0,
+    completedChallenges: new Set(),
+    gameStarted: Date.now(),
+    gameExpired: false
+};
 
-        // Load or initialize results from memory
-        let gameResults = JSON.parse(localStorage.getItem('gameResults') || '{}');
+/* -------------- Static challenges (unchanged) -------------- */
+const challenges = [
+    { id: 'quiz1', type: 'quiz', title: 'التحدي الأول / 1st Challenge', question: 'ما هي عاصمة المملكة العربية السعودية؟ / What is the capital of Saudi Arabia?', options:['الرياض / Riyadh','جدة / Jeddah','مكة / Makkah','القصيم / Alkaseem'], correct:0, points:5 },
+    { id: 'quiz2', type: 'quiz', title: 'التحدي الثاني / 2nd Challenge', question: 'كم عدد أيام السنة؟ / How many days are in a year?', options:['364','365','366','367'], correct:1, points:5 },
+    { id: 'math1', type: 'math', title: 'التحدي الثالث / 3rd Challenge', question: '15 + 27 = ?', answer:42, points:3 },
+    { id: 'math2', type: 'math', title: 'التحدي الرابع / 4th Challenge', question: '8 × 7 = ?', answer:56, points:3 }
+];
 
-        // Challenges data - NOTE: Modify these to change game content
-        const challenges = [
-            {
-                id: 'quiz1',
-                type: 'quiz',
-                title: 'التحدي الأول / 1st Challenge',
-                question: 'ما هي عاصمة المملكة العربية السعودية؟ / What is the capital of Saudi Arabia?',
-                options: [
-                    'الرياض / Riyadh',
-                    'جدة / Jeddah', 
-                    'مكة / Makkah',
-                    'القصيم / Alkaseem'
-                ],
-                correct: 0,
-                points: 5
-            },
-            {
-                id: 'quiz2',
-                type: 'quiz',
-                title: 'التحدي الثاني / 2nd Challenge',
-                question: 'كم عدد أيام السنة؟ / How many days are in a year?',
-                options: [
-                    '364',
-                    '365',
-                    '366',
-                    '367'
-                ],
-                correct: 1,
-                points: 5
-            },
-            {
-                id: 'math1',
-                type: 'math',
-                title: 'التحدي الثالث / 3rd Challenge',
-                question: '15 + 27 = ?',
-                answer: 42,
-                points: 3
-            },
-            {
-                id: 'math2',
-                type: 'math',
-                title: 'التحدي الرابع / 4th Challenge', 
-                question: '8 × 7 = ?',
-                answer: 56,
-                points: 3
-            },
-           // {
-            //    id: 'maze1',
-            //    type: 'maze',
-           //     title: 'التحدي الخامس / 5th Challenge',
-            //    question: 'اعثر على الطريق من البداية إلى النهاية / Find the path from start to end',
-             //   maze: [
-             //       [1, 0, 0, 0, 0],
-            //        [1, 1, 0, 1, 0],
-             //       [0, 1, 1, 1, 0],
-           //         [0, 0, 0, 1, 1],
-           //         [0, 0, 0, 0, 2]
-           //     ],
-           //     correctPath: [[0,0], [1,0], [1,1], [2,1], [2,2], [2,3], [3,3], [3,4], [4,4]],
-           //     points: 4
-          //  }
-        
-        ];
+/* -------------- UI / Game functions -------------- */
+function checkGameExpiry() {
+    const now = Date.now();
+    const gameEnd = gameState.gameStarted + (GAME_CONFIG.gameDurationHours * 60 * 60 * 1000);
+    gameState.gameExpired = now > gameEnd;
+}
 
-        // Initialize the game
-        function initGame() {
-            checkGameExpiry();
-            populateOtherPlayers();
-            renderChallenges();
-            
-            if (!gameState.gameExpired) {
-                startTimer();
-            }
-        }
-
-        function checkGameExpiry() {
-            const now = Date.now();
-            const gameEnd = gameState.gameStarted + (GAME_CONFIG.gameDurationHours * 60 * 60 * 1000);
-            gameState.gameExpired = now > gameEnd;
-        }
+function initGame() {
+    checkGameExpiry();
+    populateOtherPlayers();
+    renderChallenges();
+    if (!gameState.gameExpired) startTimer();
+}
 
 async function startGame() {
     const code = document.getElementById('playerCode').value.trim();
-
     if (!code || code.length !== 4) {
         alert('يرجى إدخال كود صحيح من 4 أرقام / Please enter a valid 4-digit code');
         return;
     }
 
-    // Load players from Google Sheet
-    const res = await fetch(SHEET_URL);
-    const rows = await res.json();
+    // Fetch players/rows from sheet
+    let rows;
+    try {
+        rows = await loadResultsArray();
+    } catch (e) {
+        console.error("Failed to load sheet rows:", e);
+        alert('خطأ في الاتصال بالخادم. تأكد من أن رابط Google Apps Script صحيح وأنه تم نشره كـ Web App.');
+        return;
+    }
 
-    // Find player by Code
-    const playerRow = rows.find(r => String(r.Code).trim() === code);
-
+    const playerRow = rows.find(r => String(r.Code) === code);
     if (!playerRow) {
         alert('كود غير صحيح / Invalid code');
         return;
     }
 
-    // If already finished → jump to results
+    // If this code already has Points & Time -> show results immediately
     if (playerRow.Points && playerRow.Time) {
+        // set current player for highlighting in results
+        gameState.currentPlayer = { code, name: playerRow.Name, avatar: playerRow.Avatar };
         showResults();
         return;
     }
 
-    // Otherwise → set up current player
-    gameState.currentPlayer = {
-        code,
-        name: playerRow.Name || 'Player',
-        avatar: playerRow.Avatar || '🙂'
-    };
+    // Start the game for this player
+    gameState.currentPlayer = { code, name: playerRow.Name, avatar: playerRow.Avatar };
     gameState.startTime = Date.now();
+    gameState.currentPoints = 0;
+    gameState.completedChallenges = new Set();
 
-    // Switch to the game page
     document.getElementById('introPage').classList.remove('active');
     document.getElementById('gamePage').classList.add('active');
 
     initGame();
 }
 
+function populateOtherPlayers() {
+    const container = document.getElementById('otherPlayers');
+    container.innerHTML = '';
+    document.getElementById('currentPlayerAvatar').textContent = (gameState.currentPlayer && gameState.currentPlayer.avatar) ? gameState.currentPlayer.avatar : '🙂';
+    // We removed the old GAME_CONFIG.players loop because players list is in the sheet now
+}
 
-        function populateOtherPlayers() {
-            const container = document.getElementById('otherPlayers');
-            container.innerHTML = '';
-            
-            // Set current player avatar
-            document.getElementById('currentPlayerAvatar').textContent = gameState.currentPlayer.avatar;
-            
-            // Add other players (excluding current player)
-            Object.values(GAME_CONFIG.players).forEach(player => {
-                if (player !== gameState.currentPlayer) {
-                    const avatar = document.createElement('div');
-                    avatar.className = 'player-avatar';
-                    avatar.textContent = player.avatar;
-                    container.appendChild(avatar);
-                }
-            });
-        }
+function renderChallenges() {
+    const container = document.getElementById('challengesGrid');
+    container.innerHTML = '';
+    challenges.forEach(challenge => container.appendChild(createChallengeCard(challenge)));
+}
 
-        function renderChallenges() {
-            const container = document.getElementById('challengesGrid');
-            container.innerHTML = '';
-            
-            challenges.forEach(challenge => {
-                const card = createChallengeCard(challenge);
-                container.appendChild(card);
-            });
-        }
-
-        function createChallengeCard(challenge) {
-            const card = document.createElement('div');
-            card.className = 'challenge-card';
-            card.dataset.challengeId = challenge.id;
-            
-            let content = `
-                <div class="challenge-title">${challenge.title}</div>
-                <div class="challenge-question">${challenge.question}</div>
-            `;
-            
-            if (challenge.type === 'quiz') {
-                content += '<div class="options">';
-                challenge.options.forEach((option, index) => {
-                    content += `<button class="option" onclick="selectOption('${challenge.id}', ${index})">${String.fromCharCode(65 + index)}. ${option}</button>`;
-                });
-                content += '</div>';
-            } else if (challenge.type === 'math') {
-                content += `<input type="number" class="math-input" id="math-${challenge.id}" placeholder="?">`;
-            } else if (challenge.type === 'maze') {
-                content += '<div class="maze-container" id="maze-' + challenge.id + '"></div>';
-                content += '<div>اضغط على المربعات لرسم المسار / Click squares to draw path</div>';
-            }
-            
-            content += `<button class="submit-btn" onclick="submitChallenge('${challenge.id}')">إرسال / Submit</button>`;
-            
-            card.innerHTML = content;
-            
-            if (challenge.type === 'maze') {
-                setTimeout(() => renderMaze(challenge), 100);
-            }
-            
-            return card;
-        }
-
-        function renderMaze(challenge) {
-            const container = document.getElementById(`maze-${challenge.id}`);
-            if (!container) return;
-            
-            container.innerHTML = '';
-            challenge.maze.forEach((row, rowIndex) => {
-                row.forEach((cell, colIndex) => {
-                    const cellDiv = document.createElement('div');
-                    cellDiv.className = 'maze-cell';
-                    cellDiv.dataset.row = rowIndex;
-                    cellDiv.dataset.col = colIndex;
-                    
-                    if (cell === 0) {
-                        cellDiv.classList.add('wall');
-                        cellDiv.textContent = '█';
-                    } else if (cell === 1) {
-                        cellDiv.classList.add('path');
-                        cellDiv.onclick = () => toggleMazeCell(challenge.id, rowIndex, colIndex);
-                    } else if (cell === 2) {
-                        cellDiv.classList.add('end');
-                        cellDiv.textContent = '🎯';
-                    }
-                    
-                    if (rowIndex === 0 && colIndex === 0) {
-                        cellDiv.classList.add('start');
-                        cellDiv.textContent = '🟢';
-                    }
-                    
-                    container.appendChild(cellDiv);
-                });
-            });
-            
-            // Initialize player path
-            if (!challenge.playerPath) {
-                challenge.playerPath = [];
-            }
-        }
-
-        function toggleMazeCell(challengeId, row, col) {
-            const challenge = challenges.find(c => c.id === challengeId);
-            if (!challenge.playerPath) challenge.playerPath = [];
-            
-            const cellKey = `${row},${col}`;
-            const cellDiv = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-            
-            if (challenge.playerPath.includes(cellKey)) {
-                challenge.playerPath = challenge.playerPath.filter(p => p !== cellKey);
-                cellDiv.classList.remove('selected');
-            } else {
-                challenge.playerPath.push(cellKey);
-                cellDiv.classList.add('selected');
-            }
-        }
-
-        function selectOption(challengeId, optionIndex) {
-            const card = document.querySelector(`[data-challenge-id="${challengeId}"]`);
-            const options = card.querySelectorAll('.option');
-            
-            options.forEach(option => option.classList.remove('selected'));
-            options[optionIndex].classList.add('selected');
-            
-            const challenge = challenges.find(c => c.id === challengeId);
-            challenge.selectedOption = optionIndex;
-        }
-
-        function submitChallenge(challengeId) {
-            const challenge = challenges.find(c => c.id === challengeId);
-            const card = document.querySelector(`[data-challenge-id="${challengeId}"]`);
-            
-            let correct = false;
-            
-            if (challenge.type === 'quiz') {
-                correct = challenge.selectedOption === challenge.correct;
-            } else if (challenge.type === 'math') {
-                const input = document.getElementById(`math-${challengeId}`);
-                correct = parseInt(input.value) === challenge.answer;
-            } else if (challenge.type === 'maze') {
-                if (challenge.playerPath) {
-                    const pathString = challenge.correctPath.map(p => `${p[0]},${p[1]}`).join('|');
-                    const playerString = challenge.playerPath.sort().join('|');
-                    correct = pathString === playerString;
-                }
-            }
-            
-            if (correct) {
-                gameState.currentPoints += challenge.points;
-                gameState.completedChallenges.add(challengeId);
-                card.classList.add('completed');
-                
-                // Disable further interaction
-                const buttons = card.querySelectorAll('button, input');
-                buttons.forEach(btn => btn.disabled = true);
-                
-                updatePlayerStats();
-                
-                // Show finish button when all challenges completed
-                if (gameState.completedChallenges.size === challenges.length) {
-                    document.getElementById('finishBtn').style.display = 'block';
-                }
-                
-                alert('إجابة صحيحة! / Correct answer!');
-            } else {
-                alert('إجابة خاطئة، حاول مرة أخرى / Wrong answer, try again');
-            }
-        }
-
-        function updatePlayerStats() {
-            document.getElementById('playerPoints').textContent = `${gameState.currentPoints}/20`;
-        }
-
-        function startTimer() {
-            setInterval(() => {
-                if (gameState.startTime) {
-                    const elapsed = Math.floor((Date.now() - gameState.startTime) / 1000);
-                    const minutes = Math.floor(elapsed / 60);
-                    const seconds = elapsed % 60;
-                    document.getElementById('playerTime').textContent = 
-                        `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-                }
-            }, 1000);
-        }
-
-        function finishGame() {
-            gameState.endTime = Date.now();
-            const totalTime = Math.floor((gameState.endTime - gameState.startTime) / 1000);
-            
-            // Save results to memory (Note: In a real app, this would be saved to a server)
-            saveResult(playerCode, {
-    name: gameState.currentPlayer.name,
-    avatar: gameState.currentPlayer.avatar,
-    points: gameState.currentPoints,
-    time: totalTime
-});
-async function showResults() {
-    document.getElementById('gamePage').classList.remove('active');
-    document.getElementById('resultsPage').classList.add('active');
-    await loadResults();
-            // NOTE: Since localStorage is not supported, results will only persist during this session
-            // In a real application, you would send this data to a server
-            
-        }
-
-        function showResults() {
-            document.getElementById('gamePage').classList.remove('active');
-            document.getElementById('resultsPage').classList.add('active');
-            
-            renderResults();
-        }
-
-        function createResultCard(result, isWinner, isCurrentPlayer) {
+function createChallengeCard(challenge) {
     const card = document.createElement('div');
-    card.className = 'result-card';
-    
-    if (isWinner) card.classList.add('winner');
-    if (isCurrentPlayer) card.classList.add('current-player');
-    
-    card.innerHTML = `
-        <div class="result-avatar">${result.avatar}</div>
-        <div class="result-info">
-            <div class="result-name">${result.name}</div>
-            <div class="result-stats">
-                النقاط / Points: ${result.points} |
-                الوقت / Time: ${Math.floor(result.time / 60)}:${(result.time % 60).toString().padStart(2, '0')}
-            </div>
-        </div>
-    `;
-    
+    card.className = 'challenge-card';
+    card.dataset.challengeId = challenge.id;
+
+    let content = `<div class="challenge-title">${challenge.title}</div><div class="challenge-question">${challenge.question}</div>`;
+    if (challenge.type === 'quiz') {
+        content += '<div class="options">';
+        challenge.options.forEach((option, index) => content += `<button class="option" onclick="selectOption('${challenge.id}', ${index})">${String.fromCharCode(65 + index)}. ${option}</button>`);
+        content += '</div>';
+    } else if (challenge.type === 'math') {
+        content += `<input type="number" class="math-input" id="math-${challenge.id}" placeholder="?">`;
+    }
+
+    content += `<button class="submit-btn" onclick="submitChallenge('${challenge.id}')">إرسال / Submit</button>`;
+    card.innerHTML = content;
     return card;
 }
 
+function selectOption(challengeId, optionIndex) {
+    const card = document.querySelector(`[data-challenge-id="${challengeId}"]`);
+    const options = card.querySelectorAll('.option');
+    options.forEach(opt => opt.classList.remove('selected'));
+    options[optionIndex].classList.add('selected');
+    const challenge = challenges.find(c => c.id === challengeId);
+    challenge.selectedOption = optionIndex;
+}
 
-        function renderResultsList(resultsArray) {
+function submitChallenge(challengeId) {
+    const challenge = challenges.find(c => c.id === challengeId);
+    const card = document.querySelector(`[data-challenge-id="${challengeId}"]`);
+    let correct = false;
+    if (challenge.type === 'quiz') {
+        correct = challenge.selectedOption === challenge.correct;
+    } else if (challenge.type === 'math') {
+        const input = document.getElementById(`math-${challengeId}`);
+        correct = parseInt(input.value, 10) === challenge.answer;
+    }
+    if (correct) {
+        gameState.currentPoints += challenge.points;
+        gameState.completedChallenges.add(challengeId);
+        card.classList.add('completed');
+        const buttons = card.querySelectorAll('button, input');
+        buttons.forEach(b => b.disabled = true);
+        updatePlayerStats();
+        if (gameState.completedChallenges.size === challenges.length) document.getElementById('finishBtn').style.display = 'block';
+        alert('إجابة صحيحة! / Correct answer!');
+    } else {
+        alert('إجابة خاطئة، حاول مرة أخرى / Wrong answer, try again');
+    }
+}
+
+function updatePlayerStats() {
+    document.getElementById('playerPoints').textContent = `${gameState.currentPoints}/${challenges.reduce((s,c)=>s+c.points,0)}`;
+}
+
+function startTimer() {
+    setInterval(() => {
+        if (gameState.startTime) {
+            const elapsed = Math.floor((Date.now() - gameState.startTime) / 1000);
+            const minutes = Math.floor(elapsed / 60);
+            const seconds = elapsed % 60;
+            document.getElementById('playerTime').textContent = `${minutes.toString().padStart(2,'0')}:${seconds.toString().padStart(2,'0')}`;
+        }
+    }, 1000);
+}
+
+async function finishGame() {
+    gameState.endTime = Date.now();
+    const totalTime = Math.floor((gameState.endTime - gameState.startTime) / 1000);
+
+    // Use current player's code
+    const playerCode = gameState.currentPlayer && gameState.currentPlayer.code;
+    if (!playerCode) {
+        alert('خطأ: رمز اللاعب غير موجود');
+        return;
+    }
+
+    // Save to sheet then show results
+    try {
+        await saveResult(playerCode, {
+            name: gameState.currentPlayer.name,
+            avatar: gameState.currentPlayer.avatar,
+            points: gameState.currentPoints,
+            time: totalTime
+        });
+    } catch (e) {
+        console.error("Save failed:", e);
+        alert('حصل خطأ أثناء حفظ النتيجة. حاول مرة أخرى.');
+        return;
+    }
+
+    showResults();
+}
+
+async function showResults() {
+    document.getElementById('introPage').classList.remove('active');
+    document.getElementById('gamePage').classList.remove('active');
+    document.getElementById('resultsPage').classList.add('active');
+
+    // Load rows and render list
+    const rows = await loadResultsArray();
+    renderResultsList(rows);
+}
+
+/* Rendered cards — tolerant to Sheet columns */
+function createResultCard(normalizedRow, isWinner, isCurrentPlayer) {
+    const name = normalizedRow.Name;
+    const avatar = normalizedRow.Avatar;
+    const points = normalizedRow.Points;
+    const time = normalizedRow.Time;
+
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    if (isWinner) card.classList.add('winner');
+    if (isCurrentPlayer) card.classList.add('current-player');
+
+    card.innerHTML = `
+        <div class="result-avatar">${avatar}</div>
+        <div class="result-info">
+            <div class="result-name">${name}</div>
+            <div class="result-stats">
+                النقاط / Points: ${points} |
+                الوقت / Time: ${Math.floor(time / 60)}:${(time % 60).toString().padStart(2,'0')}
+            </div>
+        </div>
+    `;
+    return card;
+}
+
+function renderResultsList(rows) {
     const container = document.getElementById('resultsGrid');
     container.innerHTML = '';
 
-    const top3 = resultsArray.slice(0, 3);
-    top3.forEach(result => {
-        const card = createResultCard(result, true, false); // winner highlight
-        container.appendChild(card);
+    // top 3 highlighted
+    rows.slice(0,3).forEach((r, i) => {
+        const isCurrent = (gameState.currentPlayer && String(gameState.currentPlayer.code) === String(r.Code));
+        container.appendChild(createResultCard(r, true, isCurrent));
     });
 
-    resultsArray.slice(3).forEach(result => {
-        const card = createResultCard(result, false, false);
-        container.appendChild(card);
+    // rest
+    rows.slice(3).forEach(r => {
+        const isCurrent = (gameState.currentPlayer && String(gameState.currentPlayer.code) === String(r.Code));
+        container.appendChild(createResultCard(r, false, isCurrent));
     });
+
+    // final note
+    const finalNote = document.getElementById('finalNote');
+    if (gameState.gameExpired) {
+        finalNote.innerHTML = `<div class="timer-expired">انتهت فترة اللعبة! هذه هي النتائج النهائية<br>Game period has ended! These are the final results</div>`;
+    } else {
+        finalNote.innerHTML = `هذه هي النتائج الحالية (قد تتغير مع انتهاء بقية اللاعبين)<br>These are the current results (they may change as more players finish).`;
+    }
 }
-        </script>
+
+/* --------------- End script --------------- */
+</script>
+
+    </script>
     </body>
 
 </html>
+
 
 
